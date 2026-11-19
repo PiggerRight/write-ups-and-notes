@@ -2,39 +2,38 @@
 
 ## Challenge
 
-After un-zip the given `rev_babyrust0.tar.gz`, the challenge provides an executable file named `rust0`.
+After extracting the given `rev_babyrust0.tar.gz`, the challenge provides a single executable named `rust0`.
 
 ---
 
 ## Initial Thoughts
 
-At first I check the file type and try to run it. 
+I first checked the file type and ran the program to see how it behaves.
 
 <img width="851" height="287" alt="image" src="https://github.com/user-attachments/assets/4d4cb35b-1c08-418b-9aca-eb83f784d7cd" />
 
 
-Then I throw the executable file into IDA for more examination.
+Then I loaded the executable into IDA for a closer look.
 
 ---
 
 ## Solution
 
-Rely on the behavior of the program, I search for the strings like `"Wrong! Please try again"` by using `alt` + `B` in IDA. Then I found:
+Based on the program's behavior, I searched for strings such as `"Wrong! Please try again"` by using `Alt` + `B` in IDA. This found:
 
 <img width="498" height="113" alt="image" src="https://github.com/user-attachments/assets/dc135b4e-63a4-42de-869c-47d5449c75c1" />
 
-Then I move to the IDA view of this position using `fn` + `G` to search for the address.
+I then jumped to that address with `G`.
 
 <img width="743" height="152" alt="image" src="https://github.com/user-attachments/assets/678de476-7eed-4575-8a8b-8f5a9f95f372" />
 
-I look through all functions that have the reference to this string and I decide to continue with `DATA XREF: sub_8E60+11↑o`.
+I went through the functions that reference this string and picked the one at `DATA XREF: sub_8E60+11↑o`.
 
-Next, I decompile that function by `f5`. After looking through the function, I quite sure that the flag checker is:
+Next, I decompiled that function with `F5`. After reading through it, I was fairly sure the flag checker is this part:
 
 <img width="610" height="493" alt="image" src="https://github.com/user-attachments/assets/af628279-f9ea-458a-95c1-93407cba318f" />
 
-
-I tried to simplize this code, with `input` is simply the input string:
+I simplified the code below, where `input` is the line the user typed (trimmed of surrounding whitespace by the program):
 
 ```c
 if ( input.length == 64)
@@ -60,18 +59,18 @@ if ( input.length == 64)
 // Wrong!
 ```
 
-As we can see, in each iteration each two bytes/chars of the input string is `input[v21 - 17]` and `input[v21 - 16]` are xored with `0xB3` then checked if they are equal with `*((_BYTE *)&v28 + v21 + 7)` and `*((_BYTE *)&v29 + v21)` respectively or not. 
+In each iteration, two input bytes, `input[v21 - 17]` and `input[v21 - 16]`, are XORed with `0xB3` and compared with `*((_BYTE *)&v28 + v21 + 7)` and `*((_BYTE *)&v29 + v21)` respectively. `v21` runs from `17` to `81` in steps of `2`, which gives `32` iterations and `64` bytes in total, matching the length check.
 
-However, I tried to examine `v28` and `v29` but they do not point to sthg special. Now I noticed that the variables `v31`, `v32`, and `v33` point to something intersting.
+At first, `v28` and `v29` looked like data I had to trace, but they never hold anything useful. The interesting variables are `v31`, `v32` and `v33`, which are assigned right before the loop:
 
 <img width="634" height="112" alt="image" src="https://github.com/user-attachments/assets/d7c373fb-243a-4f22-a8e0-abafc914a471" />
 
-When I examine the stack position of these variables, I found that:
+Checking the stack layout gives:
 
 ```text
-v31              → rsp + 40h    (store 32 bytes of data)
-v32              → rsp + 60h    (store 16 bytes of data)
-v33              → rsp + 70h    (store 16 bytes of data)
+v31              → rsp + 40h    (32 bytes of data)
+v32              → rsp + 60h    (16 bytes of data)
+v33              → rsp + 70h    (16 bytes of data)
 
 v28              → rsp + 28h
 v29              → rsp + 30h
@@ -81,9 +80,11 @@ With v21 = 17
 &v29 + v21       → rsp + 41h     → v31 + 1h
 ```
 
-With the increasing by `2` of `v21` after each iteration, each character of the `input` from the first one is compared with a byte in a array made by `v33`, `v32` and `v31` when xored with `0xB3`.
+So the loop reads a single 64-byte table that starts at `rsp + 40h` and is made of `v31`, `v32` and `v33` in address order. Each input byte, XORed with `0xB3`, must equal the matching table byte. IDA does not recognize that these three variables form one contiguous array, so it shows the accesses as unrelated variables.
 
-Now we just need to decode the array formed by `v33`, `v32` and `v31`.
+The table is a copy of 64 contiguous bytes in `.rodata`, from `0x4A000` to `0x4A03F`. The compiler copies it onto the stack with one 32-byte and two 16-byte values.
+
+To decode the table, we read the three chunks in address order (`v31`, then `v32`, then `v33`):
 
 ```text
 v31    →     F1F8E0F6F0C8C1C686C7ECC980C183ECC3C4DD80D7ECD6D784D28AD683D78685 (rsp + 40h → rsp + 5Fh)
@@ -91,19 +92,25 @@ v32    →     0D78087D18B8481D286D085D6D1D281D2h                               
 v33    →     0CED181D2D580D0838B8284D0808BD580h                               (rsp + 70h → rsp + 7Fh)
 ```
 
-The data hold by `v32` and `v33` is displayed as hex so we need to reverse it by bytes due to little endian.
+IDA displays the 16-byte xmmword values (`v32` and `v33`) as single 128-bit little-endian numbers, so their bytes appear reversed (the leading 0 and trailing h are only IDA's hex notation). The 32-byte ymmword (`v31`) has no integer format in IDA, so it is displayed in memory order. We therefore need to reverse the bytes of `v32` and `v33`, but not of `v31`:
 
 ```text
-v31    →     F1 F8 E0 F6 F0 C8 C1 C6 86 C7 EC C9 80 C1 83 EC C3 C4 DD 80 D7 EC D6 D7 84 D2 8A D6 83 D7 86 85 (rsp + 40h → rsp + 5Fh)
-v32    →     D2 81 D2 D1 D6 85 D0 86 D2 81 84 8B D1 87 80 D7                                                 (rsp + 60h → rsp + 6Fh)
-v33    →     80 D5 8B 80 D0 84 82 8B 83 D0 80 D5 D2 81 D1 CE                                                 (rsp + 70h → rsp + 7Fh)
+v31    →     F1 F8 E0 F6 F0 C8 C1 C6 86 C7 EC C9 80 C1 83 EC C3 C4 DD 80 D7 EC D6 D7 84 D2 8A D6 83 D7 86 85   (rsp + 40h → rsp + 5Fh)
+v32    →     D2 81 D2 D1 D6 85 D0 86 D2 81 84 8B D1 87 80 D7                                                   (rsp + 60h → rsp + 6Fh)
+v33    →     80 D5 8B 80 D0 84 82 8B 83 D0 80 D5 D2 81 D1 CE                                                   (rsp + 70h → rsp + 7Fh)
 ```
 
-Finally we just need to xor each of these with `0xB3`, translate each byte to ASCII character and get the flag.
+Finally, XOR each byte with 0xB3 and convert it to ASCII.
+
+Flag:
+
+```text
+BKSEC{ru5t_z3r0_pwn3d_*****************************************}
+```
 
 ## Key Takeaways
 
-At first I was quite struggling when examine `v28` and `v29` to find the resources that they point to and ignored `v31`, `v32`, and `v33` just because they are not called in the checker loop. So that beware when simplizing the decomplied code, we may missed something valuable.
+At first I struggled with `v28` and `v29`, trying to find what they point to, and I ignored `v31`, `v32` and `v33` because they never appear in the checker loop. In fact, the loop reads them indirectly through offsets from `v28` and `v29`. When simplifying decompiled code, remember that the decompiler may split one buffer into several variables, so compare stack offsets to see what a pointer expression really reads.
 
 ## References
 
